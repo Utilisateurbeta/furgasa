@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Niveau Furgasa - Dashboard</title>
+    <style>
+        body { 
+            background: #FFFFFF; 
+            color: #333; 
+            font-family: sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            margin: 0; 
+            padding: 10px; 
+            min-height: 100vh; 
+        }
+        
+        #status { font-size: 14px; color: #999; margin-bottom: 5px; font-weight: bold; }
+        #syncStatus { font-size: 11px; color: #0074D9; margin-top: -15px; margin-bottom: 10px; font-weight: bold; }
+
+        .container { 
+            position: relative; 
+            width: 95vw; 
+            max-width: 500px; 
+            margin-top: 20px;
+        }
+
+        .furgasa-bg { width: 100%; height: auto; opacity: 0.9; }
+
+        .val { 
+            position: absolute; 
+            font-size: 45px; 
+            font-weight: 900; 
+            z-index: 10; 
+            text-shadow: 2px 2px 0 #fff, -2px -2px 0 #fff;
+        }
+
+        #pos_AV_D { top: 12%; left: 8%; }
+        #pos_AV_G { bottom: 12%; left: 8%; }
+        #pos_AR_D { top: 12%; right: 8%; }
+        #pos_AR_G { bottom: 12%; right: 8%; }
+
+        .dashboard {
+            width: 95%;
+            max-width: 500px;
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .info-card { text-align: center; padding: 10px; background: white; border-radius: 10px; }
+        .info-label { font-size: 11px; color: #666; text-transform: uppercase; display: block; margin-bottom: 4px; }
+        .info-val { font-size: 22px; font-weight: bold; color: #333; }
+        
+        .battery-grid {
+            grid-column: span 2;
+            border-top: 1px solid #ddd;
+            padding-top: 10px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            font-size: 10px;
+            color: #888;
+            text-align: center;
+        }
+
+        .alert-banner {
+            grid-column: span 2;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+            display: none;
+        }
+
+        button { margin: 20px 0; padding: 15px 30px; font-size: 18px; background: #0074D9; color: white; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; width: 80%; }
+        #syncMeteoBtn { background: #28a745; margin-top: 0; font-size: 14px; padding: 12px; }
+        .unit { font-size: 0.5em; margin-left: 2px; }
+    </style>
+</head>
+<body>
+    <div id="status">SYSTÈME PRÊT</div>
+    <div id="syncStatus"></div>
+    
+    <button id="connectBtn">CONNECTER LE FOURGON</button>
+    <button id="syncMeteoBtn" style="display:none;">🔄 SYNCHRO MÉTÉO & HEURE</button>
+
+    <div class="container" id="levelContainer" style="display:none;">
+        <div id="pos_AV_D" class="val">--</div>
+        <div id="pos_AV_G" class="val">--</div>
+        <div id="pos_AR_D" class="val">--</div>
+        <div id="pos_AR_G" class="val">--</div>
+        <img src="Furgasa.png" class="furgasa-bg">
+    </div>
+
+    <div id="dash" class="dashboard" style="display: none;">
+        <div id="alertBox" class="alert-banner"></div>
+
+        <div class="info-card">
+            <span class="info-label">Contenu Gaz</span>
+            <span id="val_gaz" class="info-val">--</span><span class="unit">%</span>
+        </div>
+        <div class="info-card">
+            <span class="info-label">Extérieur (Gaz)</span>
+            <span id="val_t_ext" class="info-val" style="color: #0074D9;">--</span><span class="unit">°C</span>
+        </div>
+        <div class="info-card">
+            <span class="info-label">Intérieur</span>
+            <span id="val_temp" class="info-val">--</span><span class="unit">°C</span>
+            <div style="font-size: 12px; color:#999"><span id="val_hum">--</span>% hum.</div>
+        </div>
+        <div class="info-card">
+            <span class="info-label">Chaufferie</span>
+            <span id="val_t_chauff" class="info-val">--</span><span class="unit">°C</span>
+        </div>
+
+        <div class="battery-grid">
+            <span>M5: <b id="val_bat_m5">--</b>%</span>
+            <span>Gaz: <b id="bat_mop">--</b>%</span>
+            <span>Int: <b id="bat_xia">--</b>%</span>
+            <span>Chauff: <b id="bat_gov">--</b>%</span>
+        </div>
+    </div>
+
+    <script>
+        const connectBtn = document.getElementById('connectBtn');
+        const syncMeteoBtn = document.getElementById('syncMeteoBtn');
+        const status = document.getElementById('status');
+        const syncStatus = document.getElementById('syncStatus');
+        const dash = document.getElementById('dash');
+        const levelContainer = document.getElementById('levelContainer');
+        const alertBox = document.getElementById('alertBox');
+        
+        const sUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+        const cUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+        
+        let bleChar = null;
+
+        const updateWheel = (id, val) => {
+            const el = document.getElementById(id);
+            const displayVal = Math.abs(val);
+            el.innerHTML = displayVal + '<span class="unit">cm</span>';
+            if (displayVal === 0) el.style.color = "#28a745";
+            else el.style.color = "#fd7e14";
+        };
+
+        // --- FONCTIONS MÉTÉO & HEURE ---
+        const syncMeteo = async () => {
+            if (!bleChar) return;
+            syncStatus.innerText = "Recherche GPS...";
+            
+            try {
+                // 1. Position GPS
+                const pos = await new Promise((res, rej) => {
+                    navigator.geolocation.getCurrentPosition(res, rej, {timeout: 10000});
+                });
+                const lat = pos.coords.latitude;
+                const lon = pos.coords.longitude;
+
+                // 2. Appel API Open-Meteo
+                syncStatus.innerText = "Appel Météo...";
+                const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m&timezone=auto&forecast_days=7`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                // 3. Préparation des messages
+                const jours = ["DI", "LU", "MA", "ME", "JE", "VE", "SA"];
+                const encoder = new TextEncoder();
+
+                // Synchro Heure
+                const now = new Date();
+                const timeMsg = `T${now.getFullYear()},${now.getMonth()+1},${now.getDate()},${now.getHours()},${now.getMinutes()}`;
+                await bleChar.writeValue(encoder.encode(timeMsg));
+                
+                // Synchro Météo (7 jours)
+                for (let i = 0; i < 7; i++) {
+                    syncStatus.innerText = `Envoi Météo : Jour ${i+1}/7`;
+                    const idx10 = (i * 24) + 10;
+                    const idx22 = (i * 24) + 22;
+                    const d = new Date(data.hourly.time[idx10]);
+                    const jourNom = jours[d.getDay()];
+                    
+                    const weatherMsg = `W${jourNom},${Math.round(data.hourly.temperature_2m[idx10])},${data.hourly.relative_humidity_2m[idx10]},${Math.round(data.hourly.temperature_2m[idx22])},${data.hourly.relative_humidity_2m[idx22]}`;
+                    
+                    await bleChar.writeValue(encoder.encode(weatherMsg));
+                    await new Promise(r => setTimeout(r, 150)); // Petit délai pour le M5
+                }
+
+                syncStatus.innerText = "✅ Synchronisation réussie";
+                setTimeout(() => { syncStatus.innerText = ""; }, 3000);
+
+            } catch (err) {
+                syncStatus.innerText = "❌ Erreur Synchro";
+                console.error(err);
+            }
+        };
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                const device = await navigator.bluetooth.requestDevice({ 
+                    filters: [{ name: 'FURGASA' }], 
+                    optionalServices: [sUuid] 
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(sUuid);
+                bleChar = await service.getCharacteristic(cUuid);
+                
+                status.innerText = "CONNECTÉ ✅";
+                connectBtn.style.display = "none";
+                syncMeteoBtn.style.display = "block"; // On affiche le bouton de synchro
+                dash.style.display = "grid";
+                levelContainer.style.display = "block";
+
+                await bleChar.startNotifications();
+                bleChar.addEventListener('characteristicvaluechanged', (e) => {
+                    const v = e.target.value;
+                    updateWheel('pos_AV_D', v.getInt8(0)); 
+                    updateWheel('pos_AV_G', v.getInt8(1)); 
+                    updateWheel('pos_AR_D', v.getInt8(2)); 
+                    updateWheel('pos_AR_G', v.getInt8(3)); 
+
+                    document.getElementById('val_gaz').innerText      = v.getInt8(4);
+                    document.getElementById('val_temp').innerText     = v.getInt8(5);
+                    document.getElementById('val_hum').innerText      = v.getInt8(6);
+                    document.getElementById('val_t_chauff').innerText = v.getInt8(7);
+                    
+                    if (v.byteLength >= 15) {
+                        document.getElementById('val_t_ext').innerText = v.getInt8(14);
+                    }
+
+                    document.getElementById('val_bat_m5').innerText   = v.getInt8(8);
+                    document.getElementById('bat_mop').innerText      = v.getInt8(9);
+                    document.getElementById('bat_xia').innerText      = v.getInt8(10);
+                    document.getElementById('bat_gov').innerText      = v.getInt8(11);
+
+                    const alerte = v.getUint8(12);
+                    const truma_verrou = (v.byteLength > 13) ? v.getUint8(13) : 0;
+
+                    if (truma_verrou === 1) {
+                        alertBox.style.display = "block";
+                        alertBox.style.background = "#FF4136";
+                        alertBox.style.color = "white";
+                        alertBox.innerText = "⚠️ VÉRIFIER VANNE TRUMA !";
+                    } else if (alerte === 1) {
+                        alertBox.style.display = "block";
+                        alertBox.style.background = "#FFDC00";
+                        alertBox.style.color = "#333";
+                        alertBox.innerText = "⚠️ HUMIDITÉ ÉLEVÉE : AÉRER !";
+                    } else if (alerte === 2) {
+                        alertBox.style.display = "block";
+                        alertBox.style.background = "#FF4136";
+                        alertBox.style.color = "white";
+                        alertBox.innerText = "❄️ RISQUE DE GEL CHAUFFERIE !";
+                    } else {
+                        alertBox.style.display = "none";
+                    }
+                });
+            } catch (err) { status.innerText = "ERREUR: " + err; }
+        });
+
+        syncMeteoBtn.addEventListener('click', syncMeteo);
+    </script>
+</body>
+</html>

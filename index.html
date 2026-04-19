@@ -18,7 +18,7 @@
         }
         
         #status { font-size: 14px; color: #999; margin-bottom: 5px; font-weight: bold; }
-        #syncStatus { font-size: 11px; color: #0074D9; margin-top: -15px; margin-bottom: 10px; font-weight: bold; }
+        #syncStatus { font-size: 11px; color: #0074D9; margin-top: -15px; margin-bottom: 10px; font-weight: bold; text-align: center; }
 
         .container { 
             position: relative; 
@@ -153,119 +153,29 @@
 
         // --- FONCTIONS MÉTÉO & HEURE ---
         const syncMeteo = async () => {
-            if (!bleChar) return;
-            syncStatus.innerText = "Recherche GPS...";
+            if (!bleChar) {
+                alert("Connectez d'abord le Bluetooth !");
+                return;
+            }
+            
+            syncStatus.innerText = "1/3 : Recherche GPS...";
             
             try {
-                // 1. Position GPS
+                // 1. Position GPS avec gestion d'erreur précise
                 const pos = await new Promise((res, rej) => {
-                    navigator.geolocation.getCurrentPosition(res, rej, {timeout: 10000});
-                });
-                const lat = pos.coords.latitude;
-                const lon = pos.coords.longitude;
+                    navigator.geolocation.getCurrentPosition(res, rej, {
+                        enableHighAccuracy: false,
+                        timeout: 8000
+                    });
+                }).catch(e => { throw new Error("GPS indisponible : " + e.message); });
+
+                const lat = pos.coords.latitude.toFixed(2);
+                const lon = pos.coords.longitude.toFixed(2);
 
                 // 2. Appel API Open-Meteo
-                syncStatus.innerText = "Appel Météo...";
+                syncStatus.innerText = `2/3 : Appel Météo (${lat}, ${lon})...`;
                 const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m&timezone=auto&forecast_days=7`;
+                
                 const response = await fetch(url);
-                const data = await response.json();
-
-                // 3. Préparation des messages
-                const jours = ["DI", "LU", "MA", "ME", "JE", "VE", "SA"];
-                const encoder = new TextEncoder();
-
-                // Synchro Heure
-                const now = new Date();
-                const timeMsg = `T${now.getFullYear()},${now.getMonth()+1},${now.getDate()},${now.getHours()},${now.getMinutes()}`;
-                await bleChar.writeValue(encoder.encode(timeMsg));
-                
-                // Synchro Météo (7 jours)
-                for (let i = 0; i < 7; i++) {
-                    syncStatus.innerText = `Envoi Météo : Jour ${i+1}/7`;
-                    const idx10 = (i * 24) + 10;
-                    const idx22 = (i * 24) + 22;
-                    const d = new Date(data.hourly.time[idx10]);
-                    const jourNom = jours[d.getDay()];
-                    
-                    const weatherMsg = `W${jourNom},${Math.round(data.hourly.temperature_2m[idx10])},${data.hourly.relative_humidity_2m[idx10]},${Math.round(data.hourly.temperature_2m[idx22])},${data.hourly.relative_humidity_2m[idx22]}`;
-                    
-                    await bleChar.writeValue(encoder.encode(weatherMsg));
-                    await new Promise(r => setTimeout(r, 150)); // Petit délai pour le M5
-                }
-
-                syncStatus.innerText = "✅ Synchronisation réussie";
-                setTimeout(() => { syncStatus.innerText = ""; }, 3000);
-
-            } catch (err) {
-                syncStatus.innerText = "❌ Erreur Synchro";
-                console.error(err);
-            }
-        };
-
-        connectBtn.addEventListener('click', async () => {
-            try {
-                const device = await navigator.bluetooth.requestDevice({ 
-                    filters: [{ name: 'FURGASA' }], 
-                    optionalServices: [sUuid] 
-                });
-                const server = await device.gatt.connect();
-                const service = await server.getPrimaryService(sUuid);
-                bleChar = await service.getCharacteristic(cUuid);
-                
-                status.innerText = "CONNECTÉ ✅";
-                connectBtn.style.display = "none";
-                syncMeteoBtn.style.display = "block"; // On affiche le bouton de synchro
-                dash.style.display = "grid";
-                levelContainer.style.display = "block";
-
-                await bleChar.startNotifications();
-                bleChar.addEventListener('characteristicvaluechanged', (e) => {
-                    const v = e.target.value;
-                    updateWheel('pos_AV_D', v.getInt8(0)); 
-                    updateWheel('pos_AV_G', v.getInt8(1)); 
-                    updateWheel('pos_AR_D', v.getInt8(2)); 
-                    updateWheel('pos_AR_G', v.getInt8(3)); 
-
-                    document.getElementById('val_gaz').innerText      = v.getInt8(4);
-                    document.getElementById('val_temp').innerText     = v.getInt8(5);
-                    document.getElementById('val_hum').innerText      = v.getInt8(6);
-                    document.getElementById('val_t_chauff').innerText = v.getInt8(7);
-                    
-                    if (v.byteLength >= 15) {
-                        document.getElementById('val_t_ext').innerText = v.getInt8(14);
-                    }
-
-                    document.getElementById('val_bat_m5').innerText   = v.getInt8(8);
-                    document.getElementById('bat_mop').innerText      = v.getInt8(9);
-                    document.getElementById('bat_xia').innerText      = v.getInt8(10);
-                    document.getElementById('bat_gov').innerText      = v.getInt8(11);
-
-                    const alerte = v.getUint8(12);
-                    const truma_verrou = (v.byteLength > 13) ? v.getUint8(13) : 0;
-
-                    if (truma_verrou === 1) {
-                        alertBox.style.display = "block";
-                        alertBox.style.background = "#FF4136";
-                        alertBox.style.color = "white";
-                        alertBox.innerText = "⚠️ VÉRIFIER VANNE TRUMA !";
-                    } else if (alerte === 1) {
-                        alertBox.style.display = "block";
-                        alertBox.style.background = "#FFDC00";
-                        alertBox.style.color = "#333";
-                        alertBox.innerText = "⚠️ HUMIDITÉ ÉLEVÉE : AÉRER !";
-                    } else if (alerte === 2) {
-                        alertBox.style.display = "block";
-                        alertBox.style.background = "#FF4136";
-                        alertBox.style.color = "white";
-                        alertBox.innerText = "❄️ RISQUE DE GEL CHAUFFERIE !";
-                    } else {
-                        alertBox.style.display = "none";
-                    }
-                });
-            } catch (err) { status.innerText = "ERREUR: " + err; }
-        });
-
-        syncMeteoBtn.addEventListener('click', syncMeteo);
-    </script>
-</body>
-</html>
+                if (!response.ok) throw new Error("Serveur Météo injoignable");
+                const data = await response

@@ -75,6 +75,18 @@
             el.style.color = (displayVal === 0) ? "#28a745" : "#fd7e14";
         };
 
+        // Écriture forcée sans attendre de réponse
+        const fastWrite = async (data) => {
+            try {
+                // writeValueWithoutResponse est plus robuste quand le buffer sature
+                await bleChar.writeValueWithoutResponse(data);
+                return true;
+            } catch (e) {
+                // Fallback si non supporté
+                await bleChar.writeValue(data);
+            }
+        }
+
         const syncMeteo = async () => {
             if (!bleChar) return;
             
@@ -82,7 +94,6 @@
             let lat = "46.22", lon = "2.21";
             
             try {
-                // On fait la partie réseau EN PREMIER
                 const pos = await new Promise((res) => {
                     navigator.geolocation.getCurrentPosition(res, () => res(null), {timeout: 3000});
                 });
@@ -90,12 +101,11 @@
                 const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m&timezone=auto&forecast_days=7`);
                 const data = await response.json();
 
-                syncStatus.innerText = "Préparation Bluetooth...";
+                syncStatus.innerText = "Attente silence (2s)...";
                 
-                // RUSE : On arrête carrément les notifications et on attend 1 seconde
-                // pour que le buffer Bluetooth se vide totalement.
+                // On stoppe tout et on attend VRAIMENT
                 try { await bleChar.stopNotifications(); } catch(e) {}
-                await new Promise(r => setTimeout(r, 1200));
+                await new Promise(r => setTimeout(r, 2000));
 
                 const encoder = new TextEncoder();
                 const jours = ["DI", "LU", "MA", "ME", "JE", "VE", "SA"];
@@ -103,8 +113,9 @@
                 // Envoi Heure
                 const now = new Date();
                 const tMsg = `T${now.getFullYear()},${now.getMonth()+1},${now.getDate()},${now.getHours()},${now.getMinutes()}`;
-                await bleChar.writeValueWithResponse(encoder.encode(tMsg));
-                await new Promise(r => setTimeout(r, 800));
+                syncStatus.innerText = "Envoi Heure...";
+                await fastWrite(encoder.encode(tMsg));
+                await new Promise(r => setTimeout(r, 1000));
 
                 // Envoi Météo
                 for (let i = 0; i < 7; i++) {
@@ -114,18 +125,17 @@
                     const wMsg = `W${jours[d.getDay()]},${Math.round(data.hourly.temperature_2m[idx10])},${data.hourly.relative_humidity_2m[idx10]},${Math.round(data.hourly.temperature_2m[idx22])},${data.hourly.relative_humidity_2m[idx22]}`;
                     
                     syncStatus.innerText = `Envoi J+${i}...`;
-                    await bleChar.writeValueWithResponse(encoder.encode(wMsg));
-                    await new Promise(r => setTimeout(r, 800));
+                    await fastWrite(encoder.encode(wMsg));
+                    await new Promise(r => setTimeout(r, 1000));
                 }
 
-                syncStatus.innerText = "✅ Terminé !";
+                syncStatus.innerText = "✅ Synchronisé !";
                 await bleChar.startNotifications();
                 setTimeout(() => { syncStatus.innerText = ""; }, 3000);
 
             } catch (err) {
-                console.error(err);
-                syncStatus.innerText = "❌ Erreur GATT";
-                alert("Le Bluetooth a bloqué. Essayez de redémarrer le M5Stack.");
+                syncStatus.innerText = "❌ Échec critique";
+                alert("Erreur Bluetooth persistante. Une déconnexion physique du M5Stack peut être nécessaire.");
                 try { await bleChar.startNotifications(); } catch(e) {}
             }
         };
@@ -159,8 +169,8 @@
                     document.getElementById('bat_xia').innerText = v.getInt8(10);
                     document.getElementById('bat_gov').innerText = v.getInt8(11);
                     const alerte = v.getUint8(12);
-                    if (alerte === 1) { alertBox.style.display = "block"; alertBox.innerText = "⚠️ HUMIDITÉ !"; }
-                    else if (alerte === 2) { alertBox.style.display = "block"; alertBox.innerText = "❄️ RISQUE GEL !"; }
+                    if (alerte === 1) { alertBox.style.display = "block"; alertBox.style.background = "#FFDC00"; alertBox.innerText = "⚠️ HUMIDITÉ !"; }
+                    else if (alerte === 2) { alertBox.style.display = "block"; alertBox.style.background = "#FF4136"; alertBox.innerText = "❄️ RISQUE GEL !"; }
                     else { alertBox.style.display = "none"; }
                 });
             } catch (err) { alert("Bluetooth : " + err); }

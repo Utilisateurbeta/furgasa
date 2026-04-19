@@ -75,71 +75,71 @@
             el.style.color = (displayVal === 0) ? "#28a745" : "#fd7e14";
         };
 
-        const syncMeteo = async () => {
-            if (!bleChar || !bleDevice.gatt.connected) {
-                alert("Erreur : Connexion perdue. Reconnectez-vous.");
-                return;
+        // Fonction d'écriture avec répétition si échec
+        const safeWrite = async (data) => {
+            for(let i=0; i<3; i++) {
+                try {
+                    await bleChar.writeValue(data);
+                    return true;
+                } catch(e) {
+                    console.log("Tentative écriture ratée, retry...", i);
+                    await new Promise(r => setTimeout(r, 300));
+                }
             }
+            throw new Error("GATT bloqué après 3 essais.");
+        }
 
-            syncStatus.innerText = "1/2 : Cloud...";
+        const syncMeteo = async () => {
+            if (!bleChar || !bleDevice.gatt.connected) return alert("Reconnectez le Bluetooth.");
+
+            syncStatus.innerText = "Cloud...";
             let lat = "46.22", lon = "2.21";
             
             try {
-                // Étape 1 : Récupérer les données Internet AVANT le Bluetooth
                 const pos = await new Promise((res) => {
-                    navigator.geolocation.getCurrentPosition(res, () => res(null), {timeout: 4000});
+                    navigator.geolocation.getCurrentPosition(res, () => res(null), {timeout: 3000});
                 });
                 if (pos) { lat = pos.coords.latitude.toFixed(2); lon = pos.coords.longitude.toFixed(2); }
 
                 const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m&timezone=auto&forecast_days=7`);
                 const data = await response.json();
 
-                // Étape 2 : Préparer l'envoi Bluetooth
-                syncStatus.innerText = "2/2 : Envoi...";
+                syncStatus.innerText = "Envoi...";
                 const jours = ["DI", "LU", "MA", "ME", "JE", "VE", "SA"];
                 const encoder = new TextEncoder();
 
-                // Nettoyage agressif du flux pour éviter GATT error
-                await bleChar.stopNotifications();
-                await new Promise(r => setTimeout(r, 600));
+                // On n'arrête PLUS les notifications (ça semble faire planter Vivaldi)
+                // On attend juste un petit moment de calme
+                await new Promise(r => setTimeout(r, 500));
 
                 const now = new Date();
                 const timeMsg = `T${now.getFullYear()},${now.getMonth()+1},${now.getDate()},${now.getHours()},${now.getMinutes()}`;
-                await bleChar.writeValue(encoder.encode(timeMsg));
-                await new Promise(r => setTimeout(r, 1000)); 
+                await safeWrite(encoder.encode(timeMsg));
+                await new Promise(r => setTimeout(r, 800)); 
                 
                 for (let i = 0; i < 7; i++) {
                     const idx10 = (i * 24) + 10;
                     const idx22 = (i * 24) + 22;
                     const d = new Date(data.hourly.time[idx10]);
-                    
-                    // Format ultra-court pour économiser le buffer
                     const weatherMsg = `W${jours[d.getDay()]},${Math.round(data.hourly.temperature_2m[idx10])},${data.hourly.relative_humidity_2m[idx10]},${Math.round(data.hourly.temperature_2m[idx22])},${data.hourly.relative_humidity_2m[idx22]}`;
                     
                     syncStatus.innerText = `Jour ${i+1}/7...`;
-                    await bleChar.writeValue(encoder.encode(weatherMsg));
-                    await new Promise(r => setTimeout(r, 850)); // Délai long de sécurité
+                    await safeWrite(encoder.encode(weatherMsg));
+                    await new Promise(r => setTimeout(r, 600)); 
                 }
 
-                // Fin : relancer le flux de données
-                await bleChar.startNotifications();
-                syncStatus.innerText = "✅ Synchronisé !";
+                syncStatus.innerText = "✅ Succès !";
                 setTimeout(() => { syncStatus.innerText = ""; }, 3000);
 
             } catch (err) {
-                console.error(err);
-                syncStatus.innerText = "❌ Échec";
-                alert("Erreur GATT : Rapprochez le téléphone ou redémarrez le M5Stack.");
-                try { await bleChar.startNotifications(); } catch(e) {}
+                syncStatus.innerText = "❌ Erreur GATT";
+                alert("Erreur : " + err.message);
             }
         };
 
         connectBtn.addEventListener('click', async () => {
             try {
-                bleDevice = await navigator.bluetooth.requestDevice({ 
-                    filters: [{ name: 'FURGASA' }], 
-                    optionalServices: [sUuid] 
-                });
+                bleDevice = await navigator.bluetooth.requestDevice({ filters: [{ name: 'FURGASA' }], optionalServices: [sUuid] });
                 const server = await bleDevice.gatt.connect();
                 const service = await server.getPrimaryService(sUuid);
                 bleChar = await service.getCharacteristic(cUuid);
@@ -153,10 +153,8 @@
                 await bleChar.startNotifications();
                 bleChar.addEventListener('characteristicvaluechanged', (e) => {
                     const v = e.target.value;
-                    updateWheel('pos_AV_D', v.getInt8(0)); 
-                    updateWheel('pos_AV_G', v.getInt8(1)); 
-                    updateWheel('pos_AR_D', v.getInt8(2)); 
-                    updateWheel('pos_AR_G', v.getInt8(3)); 
+                    updateWheel('pos_AV_D', v.getInt8(0)); updateWheel('pos_AV_G', v.getInt8(1)); 
+                    updateWheel('pos_AR_D', v.getInt8(2)); updateWheel('pos_AR_G', v.getInt8(3)); 
                     document.getElementById('val_gaz').innerText = v.getInt8(4);
                     document.getElementById('val_temp').innerText = v.getInt8(5);
                     document.getElementById('val_hum').innerText = v.getInt8(6);
@@ -166,16 +164,12 @@
                     document.getElementById('bat_mop').innerText = v.getInt8(9);
                     document.getElementById('bat_xia').innerText = v.getInt8(10);
                     document.getElementById('bat_gov').innerText = v.getInt8(11);
-
                     const alerte = v.getUint8(12);
                     const truma_verrou = (v.byteLength > 13) ? v.getUint8(13) : 0;
-                    if (truma_verrou === 1) { 
-                        alertBox.style.display = "block"; alertBox.style.background = "#FF4136"; alertBox.style.color = "white"; alertBox.innerText = "⚠️ VANNE TRUMA !"; 
-                    } else if (alerte === 1) { 
-                        alertBox.style.display = "block"; alertBox.style.background = "#FFDC00"; alertBox.style.color = "#333"; alertBox.innerText = "⚠️ HUMIDITÉ !"; 
-                    } else if (alerte === 2) { 
-                        alertBox.style.display = "block"; alertBox.style.background = "#FF4136"; alertBox.style.color = "white"; alertBox.innerText = "❄️ RISQUE GEL !"; 
-                    } else { alertBox.style.display = "none"; }
+                    if (truma_verrou === 1) { alertBox.style.display = "block"; alertBox.style.background = "#FF4136"; alertBox.style.color = "white"; alertBox.innerText = "⚠️ VANNE TRUMA !"; }
+                    else if (alerte === 1) { alertBox.style.display = "block"; alertBox.style.background = "#FFDC00"; alertBox.style.color = "#333"; alertBox.innerText = "⚠️ HUMIDITÉ !"; }
+                    else if (alerte === 2) { alertBox.style.display = "block"; alertBox.style.background = "#FF4136"; alertBox.style.color = "white"; alertBox.innerText = "❄️ RISQUE GEL !"; }
+                    else { alertBox.style.display = "none"; }
                 });
             } catch (err) { alert("Bluetooth : " + err); }
         });
